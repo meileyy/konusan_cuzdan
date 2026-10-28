@@ -9,3 +9,9 @@ android/.gradle/
 android/local.properties
 ios/Pods/
 ios/.symlinks/
+
+# macOS
+.DS_Store
+
+# Kişisel belgeler (rapor, başvuru formu)
+tasarim/
