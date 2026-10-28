@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -54,6 +56,8 @@ class _WalletScreenState extends State<WalletScreen> {
     final inWallet = kDenominations
         .where((d) => (wallet[d.valueKurus] ?? 0) > 0)
         .toList();
+    // Seviye 3'te 11 küpür var; palet büyük kalırsa cüzdana yer kalmıyor.
+    final paletteWidth = app.allowedDenominations.length > 6 ? 68.0 : 104.0;
 
     return KidScaffold(
       title: 'Cüzdanım',
@@ -89,16 +93,10 @@ class _WalletScreenState extends State<WalletScreen> {
                             ),
                           ),
                         )
-                      : ListView(
-                          padding: const EdgeInsets.fromLTRB(14, 14, 14, 4),
-                          children: [
-                            for (final d in inWallet)
-                              _WalletRow(
-                                denomination: d,
-                                count: wallet[d.valueKurus]!,
-                                onTap: () => _remove(d),
-                              ),
-                          ],
+                      : _WalletGrid(
+                          denominations: inWallet,
+                          wallet: wallet,
+                          onTap: _remove,
                         ),
                 ),
               ),
@@ -129,11 +127,17 @@ class _WalletScreenState extends State<WalletScreen> {
                           ),
                           childWhenDragging: Opacity(
                             opacity: 0.3,
-                            child: MoneyView(denomination: d, width: 104),
+                            child: MoneyView(
+                              denomination: d,
+                              width: paletteWidth,
+                            ),
                           ),
                           child: GestureDetector(
                             onTap: () => _add(d),
-                            child: MoneyView(denomination: d, width: 104),
+                            child: MoneyView(
+                              denomination: d,
+                              width: paletteWidth,
+                            ),
                           ),
                         ),
                     ],
@@ -273,55 +277,205 @@ class _LeatherWallet extends StatelessWidget {
   }
 }
 
-/// Cüzdandaki bir küpür satırı: banknot + renkli adet etiketi ("×2").
+/// Cüzdandaki paralar: 2 sütunlu ızgara. 6 farklı küpüre kadar (3 satır)
+/// kaydırmadan sığacak şekilde para boyu alana göre seçilir; daha fazlası
+/// varsa ızgara kayar ve alt kenarı soluklaşır.
+class _WalletGrid extends StatelessWidget {
+  const _WalletGrid({
+    required this.denominations,
+    required this.wallet,
+    required this.onTap,
+  });
+
+  final List<Denomination> denominations;
+  final Map<int, int> wallet;
+  final void Function(Denomination) onTap;
+
+  // Sağdaki kapak (düğme) cüzdanın içine taşar; paralar onun altında kalmasın.
+  static const _padding = EdgeInsets.fromLTRB(10, 10, 34, 10);
+  static const _gap = 8.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final innerWidth = constraints.maxWidth - _padding.horizontal;
+        final innerHeight = constraints.maxHeight - _padding.vertical;
+        final cellWidth = (innerWidth - _gap) / 2;
+
+        final digits = denominations
+            .map((d) => '${wallet[d.valueKurus]}'.length)
+            .fold(1, max);
+        final tallest = denominations.any((d) => !d.isBanknote) ? 0.62 : 0.5;
+        final rows = min(3, (denominations.length / 2).ceil());
+        final rowHeight = (innerHeight - (rows - 1) * _gap) / rows;
+
+        // En büyük para boyunu bul: hem hücre genişliğine hem satır yüksekliğine sığsın.
+        var moneyWidth = 120.0;
+        late double font;
+        while (true) {
+          font = (moneyWidth * 0.22).clamp(16.0, 24.0);
+          final fitsWidth =
+              moneyWidth + _WalletRow.badgeWidth(font, digits) <= cellWidth;
+          final fitsHeight =
+              max(moneyWidth * tallest, _WalletRow.badgeHeight(font)) <=
+              rowHeight;
+          if ((fitsWidth && fitsHeight) || moneyWidth <= 48) break;
+          moneyWidth -= 4;
+        }
+
+        return _FadingScroll(
+          padding: _padding,
+          // Az para varsa ızgara cüzdanın ortasında durur.
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: max(0, innerHeight)),
+            child: Center(
+              child: Wrap(
+                spacing: _gap,
+                runSpacing: _gap,
+                children: [
+                  for (final d in denominations)
+                    SizedBox(
+                      width: cellWidth,
+                      // Tahmin tutmazsa (ör. büyük yazı tipi) taşmak yerine küçülür.
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: _WalletRow(
+                          denomination: d,
+                          count: wallet[d.valueKurus]!,
+                          moneyWidth: moneyWidth,
+                          fontSize: font,
+                          onTap: () => onTap(d),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// İçerik sığmıyorsa alt kenarı soluklaşan dikey kaydırma alanı
+/// ("aşağıda daha var" ipucu). En alta gelince soluklaşma kalkar.
+class _FadingScroll extends StatefulWidget {
+  const _FadingScroll({required this.child, required this.padding});
+
+  final Widget child;
+  final EdgeInsets padding;
+
+  @override
+  State<_FadingScroll> createState() => _FadingScrollState();
+}
+
+class _FadingScrollState extends State<_FadingScroll> {
+  final _controller = ScrollController();
+  bool _hasMore = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_update);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _update() {
+    if (!mounted || !_controller.hasClients) return;
+    final hasMore = _controller.position.extentAfter > 1;
+    if (hasMore != _hasMore) setState(() => _hasMore = hasMore);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // İçerik değişince (para eklenip çıkarılınca) yeniden ölç.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _update());
+    return ShaderMask(
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (bounds) => LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        stops: const [0, 0.8, 1],
+        colors: [
+          Colors.white,
+          Colors.white,
+          _hasMore ? Colors.transparent : Colors.white,
+        ],
+      ).createShader(bounds),
+      child: SingleChildScrollView(
+        controller: _controller,
+        padding: widget.padding,
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// Cüzdandaki bir küpür: banknot + renkli adet etiketi ("×2").
 class _WalletRow extends StatelessWidget {
   const _WalletRow({
     required this.denomination,
     required this.count,
+    required this.moneyWidth,
+    required this.fontSize,
     required this.onTap,
   });
 
   final Denomination denomination;
   final int count;
+  final double moneyWidth;
+  final double fontSize;
   final VoidCallback onTap;
+
+  // Yerleşim hesabı için etiketin yaklaşık ölçüleri (kenar boşlukları dahil).
+  static double badgeWidth(double fontSize, int digits) =>
+      fontSize * (1.85 + 0.55 * digits) + 6;
+  static double badgeHeight(double fontSize) => fontSize * 1.3 + 6;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: GestureDetector(
-        onTap: onTap,
-        child: TweenAnimationBuilder<double>(
-          key: ValueKey('${denomination.valueKurus}-$count'),
-          tween: Tween(begin: 0.85, end: 1),
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.elasticOut,
-          builder: (context, scale, child) =>
-              Transform.scale(scale: scale, child: child),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              MoneyView(denomination: denomination, width: 150),
-              Container(
-                margin: const EdgeInsets.only(left: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: denomination.color,
-                  borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.white, width: 3),
-                ),
-                child: Text(
-                  '×$count',
-                  style: rounded(
-                    size: 30,
-                    weight: FontWeight.w800,
-                    color: Colors.white,
-                    height: 1.3,
-                  ),
+    return GestureDetector(
+      onTap: onTap,
+      child: TweenAnimationBuilder<double>(
+        key: ValueKey('${denomination.valueKurus}-$count'),
+        tween: Tween(begin: 0.85, end: 1),
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.elasticOut,
+        builder: (context, scale, child) =>
+            Transform.scale(scale: scale, child: child),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            MoneyView(denomination: denomination, width: moneyWidth),
+            Container(
+              margin: EdgeInsets.only(left: fontSize * 0.27),
+              padding: EdgeInsets.symmetric(horizontal: fontSize * 0.5),
+              decoration: BoxDecoration(
+                color: denomination.color,
+                borderRadius: BorderRadius.circular(fontSize * 0.6),
+                border: Border.all(
+                  color: Colors.white,
+                  width: fontSize >= 24 ? 3 : 2,
                 ),
               ),
-            ],
-          ),
+              child: Text(
+                '×$count',
+                style: rounded(
+                  size: fontSize,
+                  weight: FontWeight.w800,
+                  color: Colors.white,
+                  height: 1.3,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

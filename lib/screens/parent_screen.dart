@@ -96,6 +96,7 @@ class _ParentScreenState extends State<ParentScreen> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
+    final hasRecordings = app.voice.recordingCount > 0;
     return Scaffold(
       appBar: AppBar(title: const Text('Eğitmen Paneli')),
       body: ListView(
@@ -139,19 +140,21 @@ class _ParentScreenState extends State<ParentScreen> {
           ),
           const _Section('Konuşan kişi'),
           SegmentedButton<bool>(
-            segments: const [
+            segments: [
               ButtonSegment(
                 value: true,
-                icon: Icon(Icons.record_voice_over),
-                label: Text('Kayıtlı ses'),
+                icon: const Icon(Icons.record_voice_over),
+                label: const Text('Kayıtlı ses'),
+                enabled: hasRecordings,
               ),
-              ButtonSegment(
+              const ButtonSegment(
                 value: false,
                 icon: Icon(Icons.computer),
                 label: Text('Bilgisayar sesi'),
               ),
             ],
-            selected: {app.useRecordedVoice},
+            // Kayıt yoksa ayar ne olursa olsun bilgisayar sesi konuşur.
+            selected: {hasRecordings && app.useRecordedVoice},
             onSelectionChanged: (s) async {
               await app.setSetting(
                 'voice_source',
@@ -164,38 +167,45 @@ class _ParentScreenState extends State<ParentScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            app.voice.recordingCount == 0
-                ? 'Henüz kayıtlı ses yok; bilgisayar sesi kullanılıyor. '
-                      'Kayıtlar assets/voice klasörüne eklenince kendiliğinden '
-                      'kullanılır (liste: tasarim/ses_kayit_listesi.md).'
-                : '${app.voice.recordingCount} / ${app.voice.phraseCount} kayıt '
+            hasRecordings
+                ? '${app.voice.recordingCount} / ${app.voice.phraseCount} kayıt '
                       'bulundu. Kaydı eksik olan cümleler bilgisayar sesiyle '
                       'okunur. Aşağıdaki hız ve ton ayarları bilgisayar sesi '
-                      'içindir.',
+                      'içindir.'
+                : 'Kayıtlı ses eklenmedi, bilgisayar sesi kullanılıyor.',
           ),
           ListTile(
             title: const Text('Konuşma hızı'),
-            subtitle: Slider(
-              value: app.speechRate.clamp(0.2, 0.7),
-              min: 0.2,
-              max: 0.7,
-              divisions: 10,
-              label: app.speechRate.toStringAsFixed(2),
-              onChanged: (v) =>
-                  app.setSetting('speech_rate', v.toStringAsFixed(2)),
-              onChangeEnd: (_) => app.sayWithComputer('Konuşma hızı böyle.'),
+            subtitle: _LabeledSlider(
+              start: 'Yavaş',
+              end: 'Hızlı',
+              slider: Slider(
+                value: app.speechRate.clamp(0.2, 0.7),
+                min: 0.2,
+                max: 0.7,
+                divisions: 10,
+                label: app.speechRate.toStringAsFixed(2),
+                onChanged: (v) =>
+                    app.setSetting('speech_rate', v.toStringAsFixed(2)),
+                onChangeEnd: (_) => app.sayWithComputer('Konuşma hızı böyle.'),
+              ),
             ),
           ),
           ListTile(
             title: const Text('Ses tonu'),
-            subtitle: Slider(
-              value: app.speechPitch.clamp(0.8, 1.4),
-              min: 0.8,
-              max: 1.4,
-              divisions: 12,
-              label: app.speechPitch.toStringAsFixed(2),
-              onChanged: (v) => app.setSetting('pitch', v.toStringAsFixed(2)),
-              onChangeEnd: (_) => app.sayWithComputer('Merhaba! Sesim böyle.'),
+            subtitle: _LabeledSlider(
+              start: 'Kalın',
+              end: 'İnce',
+              slider: Slider(
+                value: app.speechPitch.clamp(0.8, 1.4),
+                min: 0.8,
+                max: 1.4,
+                divisions: 12,
+                label: app.speechPitch.toStringAsFixed(2),
+                onChanged: (v) => app.setSetting('pitch', v.toStringAsFixed(2)),
+                onChangeEnd: (_) =>
+                    app.sayWithComputer('Merhaba! Sesim böyle.'),
+              ),
             ),
           ),
           const _Section('İlerleme (Oyun)'),
@@ -298,9 +308,35 @@ class _Section extends StatelessWidget {
       padding: const EdgeInsets.only(top: 20, bottom: 8),
       child: Text(
         title,
-        style: Theme.of(context).textTheme.titleLarge
-            ?.copyWith(fontWeight: FontWeight.w800),
+        style: Theme.of(
+          context,
+        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
       ),
+    );
+  }
+}
+
+/// İki ucunda anlamını yazan kaydırıcı: "Yavaş ——o—— Hızlı".
+class _LabeledSlider extends StatelessWidget {
+  const _LabeledSlider({
+    required this.start,
+    required this.end,
+    required this.slider,
+  });
+
+  final String start;
+  final String end;
+  final Widget slider;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodyMedium;
+    return Row(
+      children: [
+        Text(start, style: style),
+        Expanded(child: slider),
+        Text(end, style: style),
+      ],
     );
   }
 }
@@ -314,6 +350,9 @@ class _ProductDialog extends StatefulWidget {
 }
 
 class _ProductDialogState extends State<_ProductDialog> {
+  /// Çocuk ürünleri için üst sınır: 10.000 TL.
+  static const _maxPriceKurus = 1000000;
+
   final _name = TextEditingController();
   final _emoji = TextEditingController(text: '🛍️');
   final _price = TextEditingController();
@@ -337,6 +376,12 @@ class _ProductDialogState extends State<_ProductDialog> {
     }
     if (price == null || price <= 0 || price % 5 != 0) {
       setState(() => _error = 'Geçerli bir fiyat yazın (ör. 15 veya 17,50)');
+      return;
+    }
+    if (price > _maxPriceKurus) {
+      setState(
+        () => _error = 'Fiyat en fazla ${formatMoney(_maxPriceKurus)} olabilir',
+      );
       return;
     }
     Navigator.of(context).pop(

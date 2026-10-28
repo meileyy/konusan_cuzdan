@@ -23,4 +23,16 @@ void main() {
     expect(formatMoney(1750), '17,50 TL');
     expect(speakMoney(1750), '17 lira 50 kuruş');
   });
+
+  test('Tutar biçimlendirmede binlik ayraç', () {
+    expect(formatMoney(4000000), '40.000 TL');
+    expect(formatMoney(3803375), '38.033,75 TL');
+    expect(formatMoney(100000), '1.000 TL');
+    expect(formatMoney(99900), '999 TL');
+    expect(formatMoney(100000000), '1.000.000 TL');
+    expect(formatMoney(1500), '15 TL');
+    expect(formatMoney(5), '0,05 TL');
+    // Sesli okuma değişmez.
+    expect(speakMoney(4000000), '40000 lira');
+  });
 }
